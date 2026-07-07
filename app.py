@@ -471,4 +471,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main_v2()
+    from app_bq import main_bq
+
+    main_bq()
