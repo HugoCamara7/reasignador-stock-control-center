@@ -23,11 +23,22 @@ def _get_secret(path: str, default=None):
 def _bigquery_client():
     try:
         from google.cloud import bigquery
+        from google.oauth2 import service_account
     except ImportError as exc:
-        raise RuntimeError("Falta instalar google-cloud-bigquery. Revisa requirements.txt.") from exc
+        raise RuntimeError("Falta instalar google-cloud-bigquery y google-auth. Revisa requirements.txt.") from exc
 
     project_id = _get_secret("bigquery.project_id")
-    return bigquery.Client(project=project_id) if project_id else bigquery.Client()
+    service_account_info = _get_secret("bigquery.service_account_info")
+
+    if service_account_info:
+        credentials = service_account.Credentials.from_service_account_info(dict(service_account_info))
+        return bigquery.Client(project=project_id or credentials.project_id, credentials=credentials)
+
+    raise RuntimeError(
+        "BigQuery no tiene credenciales configuradas. Agrega una cuenta de servicio en "
+        "st.secrets['bigquery']['service_account_info']. Sin eso, Google intenta usar metadata.google.internal, "
+        "que solo existe dentro de Google Cloud."
+    )
 
 
 def _table_secret(name: str) -> str:
