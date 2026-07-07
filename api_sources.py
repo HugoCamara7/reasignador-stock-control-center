@@ -28,7 +28,7 @@ def _bigquery_client():
         raise RuntimeError("Falta instalar google-cloud-bigquery y google-auth. Revisa requirements.txt.") from exc
 
     project_id = _get_secret("bigquery.project_id")
-    service_account_info = _get_secret("bigquery.service_account_info")
+    service_account_info = _get_secret("bigquery.service_account_info") or _get_secret("gcp_service_account")
 
     if service_account_info:
         credentials = service_account.Credentials.from_service_account_info(dict(service_account_info))
@@ -36,8 +36,8 @@ def _bigquery_client():
 
     raise RuntimeError(
         "BigQuery no tiene credenciales configuradas. Agrega una cuenta de servicio en "
-        "st.secrets['bigquery']['service_account_info']. Sin eso, Google intenta usar metadata.google.internal, "
-        "que solo existe dentro de Google Cloud."
+        "st.secrets['gcp_service_account'] o st.secrets['bigquery']['service_account_info']. Sin eso, Google intenta "
+        "usar metadata.google.internal, que solo existe dentro de Google Cloud."
     )
 
 

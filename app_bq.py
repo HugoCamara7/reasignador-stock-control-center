@@ -9,13 +9,20 @@ from api_sources import (
     skus_from_orders,
     validate_stock_with_shopify_api,
 )
-from executive_ui import (
-    inject_executive_styles,
+from dashboard_ui import (
+    inject_dashboard_styles,
+    render_daily_breaks_panel,
+    render_detail_panel,
     render_empty_state,
+    render_filter_shell,
     render_header,
+    render_info_strip,
     render_kpi_dashboard,
+    render_recovery_panel,
     render_recommendation_table,
-    render_selected_order_detail,
+    render_sidebar,
+    render_top_model_panel,
+    close_shell,
 )
 from export_reassignment import export_reassignment_excel
 from reassignment_engine import (
@@ -54,6 +61,22 @@ def _apply_top_filters(recommendations: pd.DataFrame) -> pd.DataFrame:
         filtered = filtered[filtered["Estado"].astype(str).isin(states)]
     if confidence:
         filtered = filtered[filtered["Confianza"].astype(str).isin(confidence)]
+    return filtered
+
+
+def _apply_selected_filters(
+    recommendations: pd.DataFrame,
+    origin_store: str,
+    state: str,
+    confidence: str,
+) -> pd.DataFrame:
+    filtered = recommendations.copy()
+    if origin_store != "Todas":
+        filtered = filtered[filtered["Tienda origen"].astype(str).eq(origin_store)]
+    if state != "Todos":
+        filtered = filtered[filtered["Estado"].astype(str).eq(state)]
+    if confidence != "Todos":
+        filtered = filtered[filtered["Confianza"].astype(str).eq(confidence)]
     return filtered
 
 
@@ -165,29 +188,43 @@ def _empty_no_stock_recommendations(orders: pd.DataFrame) -> pd.DataFrame:
 
 
 def main_bq() -> None:
-    inject_executive_styles()
-    render_header()
+    inject_dashboard_styles()
+    render_sidebar()
 
-    st.subheader("Filtros")
-    filter_bar = st.columns([1, 1, 1, 1.2])
+    recommendations = st.session_state.get("bq_recommendations", pd.DataFrame())
+    alternatives = st.session_state.get("bq_alternatives", pd.DataFrame())
+
+    validate_shopify = st.session_state.get("validate_shopify_ui", False)
+    render_header(validate_shopify)
+
+    render_filter_shell()
+    filter_bar = st.columns([1.1, 1.1, 1.2, 1.15, 1.25, 1.35])
     with filter_bar[0]:
-        days_back = st.number_input("Dias hacia atras", min_value=1, max_value=90, value=7, step=1)
+        brands_text = st.text_input("Marca", value="Columbia", placeholder="Columbia")
     with filter_bar[1]:
-        stock_days_back = st.number_input("Dias de stock", min_value=1, max_value=10, value=2, step=1)
+        days_back = st.number_input("Dias hacia atras", min_value=1, max_value=90, value=7, step=1)
     with filter_bar[2]:
-        safety_stock = st.number_input("Stock seguridad", min_value=0, max_value=50, value=1, step=1)
+        origin_options = ["Todas"] + _filter_options(recommendations, "Tienda origen")
+        origin_store = st.selectbox("Tienda origen", origin_options)
     with filter_bar[3]:
-        brands_text = st.text_input("Marca", placeholder="Opcional: Columbia, Vans")
-
-    action_bar = st.columns([2, 1, 1])
-    with action_bar[0]:
-        validate_shopify = st.toggle("Validar stock actual con Shopify API", value=False)
-    with action_bar[1]:
-        max_stock_age_hours = st.number_input("Max horas stock actualizado", min_value=1, max_value=168, value=30)
-    with action_bar[2]:
-        st.write("")
+        state = st.selectbox("Estado", ["Todos", REASSIGNABLE, REVIEW, NO_STOCK])
+    with filter_bar[4]:
+        confidence = st.selectbox("Nivel de confianza", ["Todos", "Alto", "Medio", "Bajo"])
+    with filter_bar[5]:
         st.write("")
         run = st.button("Consultar quiebres y recomendar reasignación", type="primary", use_container_width=True)
+    close_shell()
+
+    control_bar = st.columns([1.25, 1, 1.1, 3])
+    with control_bar[0]:
+        validate_shopify = st.toggle("Validar stock con Shopify", value=False)
+        st.session_state["validate_shopify_ui"] = validate_shopify
+    with control_bar[1]:
+        stock_days_back = st.number_input("Dias de stock", min_value=1, max_value=10, value=2, step=1)
+    with control_bar[2]:
+        safety_stock = st.number_input("Stock seguridad", min_value=0, max_value=50, value=1, step=1)
+    with control_bar[3]:
+        max_stock_age_hours = st.number_input("Max horas stock actualizado", min_value=1, max_value=168, value=30)
 
     settings = ReassignmentSettings(
         safety_stock=int(safety_stock),
@@ -199,8 +236,6 @@ def main_bq() -> None:
     if run:
         _run_analysis(int(days_back), int(stock_days_back), brands, settings)
 
-    recommendations = st.session_state.get("bq_recommendations", pd.DataFrame())
-    alternatives = st.session_state.get("bq_alternatives", pd.DataFrame())
     shopify_warnings = st.session_state.get("bq_shopify_warnings", [])
 
     if recommendations.empty:
@@ -212,29 +247,32 @@ def main_bq() -> None:
     for warning in shopify_warnings[:5]:
         st.warning(warning)
 
-    filtered = _apply_top_filters(recommendations)
+    filtered = _apply_selected_filters(recommendations, origin_store, state, confidence)
     kpis = build_reassignment_kpis(filtered)
     render_kpi_dashboard(kpis)
 
-    _top_charts(filtered, alternatives)
+    main_col, detail_col = st.columns([4.6, 1.25])
+    with main_col:
+        chart_cols = st.columns([1.1, 1.15, 1.05])
+        with chart_cols[0]:
+            render_recovery_panel(kpis)
+        with chart_cols[1]:
+            render_daily_breaks_panel(filtered)
+        with chart_cols[2]:
+            render_top_model_panel(filtered)
 
-    st.subheader("Tabla principal de recomendaciones")
-    render_recommendation_table(filtered)
+        table_actions = st.columns([3, 1.1])
+        with table_actions[1]:
+            excel = export_reassignment_excel(filtered, alternatives, kpis)
+            st.download_button(
+                "Descargar Excel",
+                excel,
+                file_name="recomendaciones_reasignacion_pedidos.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        render_recommendation_table(filtered)
+        render_info_strip()
 
-    render_selected_order_detail(filtered, alternatives)
-
-    excel = export_reassignment_excel(filtered, alternatives, kpis)
-    st.download_button(
-        "Descargar Excel",
-        excel,
-        file_name="recomendaciones_reasignacion_pedidos.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
-
-    extra_actions = st.columns(2)
-    with extra_actions[0]:
-        st.button("Validar stock actual con Shopify", use_container_width=True, disabled=not validate_shopify)
-    with extra_actions[1]:
-        st.button("Marcar como revisado", use_container_width=True)
+    with detail_col:
+        render_detail_panel(filtered, alternatives)
