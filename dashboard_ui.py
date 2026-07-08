@@ -245,7 +245,7 @@ def render_header(validate_shopify: bool) -> None:
         <div class="topbar">
           <div>
             <h1>Motor inteligente de reasignacion de pedidos</h1>
-            <p>Detecta quiebres de stock y recomienda tiendas con stock disponible</p>
+            <p>Lee ordenes desde Shopify, cruza stock desde BigQuery y recomienda tiendas con stock disponible</p>
           </div>
           <div class="user-chip">
             <div>
@@ -253,6 +253,23 @@ def render_header(validate_shopify: bool) -> None:
               <div style="font-size:.78rem;color:#64748b;">{html.escape(status)}</div>
             </div>
             <div class="avatar">C</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_review_points() -> None:
+    st.markdown(
+        """
+        <div class="panel-card" style="padding: .9rem 1rem; margin-bottom: .9rem;">
+          <div class="panel-title" style="margin-bottom:.45rem;">Puntos importantes que revisa el motor</div>
+          <div style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:.65rem; font-size:.84rem; color:#334155;">
+            <div><strong>1. Orden Shopify</strong><br>Busca tags, notas, estado pendiente o linea no preparada.</div>
+            <div><strong>2. SKU exacto</strong><br>Para calzado no reemplaza talla ni color; solo cruza SKU exacto.</div>
+            <div><strong>3. Stock BigQuery</strong><br>Calcula disponible - seguridad - reservado por tienda.</div>
+            <div><strong>4. Confianza</strong><br>Marca riesgo si el stock es D-1 o si Shopify no valida stock actual.</div>
           </div>
         </div>
         """,

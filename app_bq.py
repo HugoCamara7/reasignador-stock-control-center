@@ -4,8 +4,9 @@ import pandas as pd
 import streamlit as st
 
 from api_sources import (
+    available_shopify_sites,
     fetch_available_stock_from_bigquery,
-    fetch_broken_orders_from_bigquery,
+    fetch_broken_orders_from_shopify,
     skus_from_orders,
     validate_stock_with_shopify_api,
 )
@@ -20,6 +21,7 @@ from dashboard_ui import (
     render_kpi_dashboard,
     render_recovery_panel,
     render_recommendation_table,
+    render_review_points,
     render_sidebar,
     render_top_model_panel,
     close_shell,
@@ -111,23 +113,30 @@ def _top_charts(recommendations: pd.DataFrame, alternatives: pd.DataFrame) -> No
 
 
 def _run_analysis(
+    site_key: str,
     days_back: int,
     stock_days_back: int,
     brands: tuple[str, ...],
     settings: ReassignmentSettings,
+    include_unfulfilled_risk: bool,
 ) -> None:
     try:
-        with st.spinner("Consultando pedidos con quiebre en BigQuery..."):
-            orders = fetch_broken_orders_from_bigquery(days_back=days_back, brands=brands)
+        with st.spinner("Consultando ordenes con posible quiebre en Shopify API..."):
+            orders = fetch_broken_orders_from_shopify(
+                days_back=days_back,
+                brands=brands,
+                include_unfulfilled_risk=include_unfulfilled_risk,
+                site_key=site_key,
+            )
     except Exception as exc:
-        st.error(f"BigQuery no respondio al consultar pedidos: {exc}")
+        st.error(f"Shopify API no respondio al consultar ordenes: {exc}")
         return
 
     if orders.empty:
         st.session_state["bq_recommendations"] = pd.DataFrame()
         st.session_state["bq_alternatives"] = pd.DataFrame()
         st.session_state["bq_shopify_warnings"] = []
-        st.info("No se encontraron pedidos con quiebre para los filtros seleccionados.")
+        st.info("No se encontraron ordenes Shopify con señal de quiebre para los filtros seleccionados.")
         return
 
     try:
@@ -148,7 +157,7 @@ def _run_analysis(
     shopify_warnings: list[str] = []
     if settings.validate_shopify:
         with st.spinner("Validando stock actual contra Shopify API..."):
-            shopify_validation, shopify_warnings = validate_stock_with_shopify_api(stock)
+            shopify_validation, shopify_warnings = validate_stock_with_shopify_api(stock, site_key=site_key)
 
     recommendations, alternatives = build_reassignment_recommendations(
         orders=orders,
@@ -196,21 +205,24 @@ def main_bq() -> None:
 
     validate_shopify = st.session_state.get("validate_shopify_ui", False)
     render_header(validate_shopify)
+    render_review_points()
 
     render_filter_shell()
-    filter_bar = st.columns([1.1, 1.1, 1.2, 1.15, 1.25, 1.35])
+    filter_bar = st.columns([1.0, 1.0, 1.0, 1.15, 1.15, 1.2, 1.35])
     with filter_bar[0]:
-        brands_text = st.text_input("Marca", value="Columbia", placeholder="Columbia")
+        site_key = st.selectbox("Sitio Shopify", available_shopify_sites(), index=0)
     with filter_bar[1]:
-        days_back = st.number_input("Dias hacia atras", min_value=1, max_value=90, value=7, step=1)
+        brands_text = st.text_input("Marca", value=site_key.replace("_", " ").title(), placeholder="Columbia")
     with filter_bar[2]:
+        days_back = st.number_input("Dias hacia atras", min_value=1, max_value=90, value=7, step=1)
+    with filter_bar[3]:
         origin_options = ["Todas"] + _filter_options(recommendations, "Tienda origen")
         origin_store = st.selectbox("Tienda origen", origin_options)
-    with filter_bar[3]:
-        state = st.selectbox("Estado", ["Todos", REASSIGNABLE, REVIEW, NO_STOCK])
     with filter_bar[4]:
-        confidence = st.selectbox("Nivel de confianza", ["Todos", "Alto", "Medio", "Bajo"])
+        state = st.selectbox("Estado", ["Todos", REASSIGNABLE, REVIEW, NO_STOCK])
     with filter_bar[5]:
+        confidence = st.selectbox("Nivel de confianza", ["Todos", "Alto", "Medio", "Bajo"])
+    with filter_bar[6]:
         st.write("")
         run = st.button("Consultar quiebres y recomendar reasignación", type="primary", use_container_width=True)
     close_shell()
@@ -225,6 +237,11 @@ def main_bq() -> None:
         safety_stock = st.number_input("Stock seguridad", min_value=0, max_value=50, value=1, step=1)
     with control_bar[3]:
         max_stock_age_hours = st.number_input("Max horas stock actualizado", min_value=1, max_value=168, value=30)
+    include_unfulfilled_risk = st.toggle(
+        "Incluir ordenes Shopify pendientes/no preparadas como riesgo de quiebre",
+        value=True,
+        help="Activalo si una orden no preparada con unidades pendientes debe entrar al motor aunque no tenga tag explicito de quiebre.",
+    )
 
     settings = ReassignmentSettings(
         safety_stock=int(safety_stock),
@@ -234,12 +251,12 @@ def main_bq() -> None:
     brands = tuple(part.strip() for part in brands_text.split(",") if part.strip())
 
     if run:
-        _run_analysis(int(days_back), int(stock_days_back), brands, settings)
+        _run_analysis(site_key, int(days_back), int(stock_days_back), brands, settings, include_unfulfilled_risk)
 
     shopify_warnings = st.session_state.get("bq_shopify_warnings", [])
 
     if recommendations.empty:
-        render_empty_state("Presiona el boton principal para consultar BigQuery y generar recomendaciones.")
+        render_empty_state("Presiona el boton principal para consultar ordenes Shopify y cruzarlas contra stock BigQuery.")
         return
 
     if "Fuente stock" in recommendations.columns and recommendations["Fuente stock"].astype(str).str.lower().isin(["d-1", "d1", "cierre"]).any():
